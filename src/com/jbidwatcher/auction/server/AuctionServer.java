@@ -16,15 +16,17 @@ package com.jbidwatcher.auction.server;
  * the factory can identify which site (ebay, yahoo, amazon, etc.) it
  * is, and do the appropriate parsing for that site.
  */
+import com.jbidwatcher.search.SearchManager;
+import com.jbidwatcher.util.*;
+import com.jbidwatcher.util.Currency;
 import com.jbidwatcher.util.config.*;
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.queue.AuctionQObject;
 import com.jbidwatcher.util.http.CookieJar;
 import com.jbidwatcher.util.http.Http;
-import com.jbidwatcher.util.Constants;
-import com.jbidwatcher.util.StringTools;
 import com.jbidwatcher.search.SearchManagerInterface;
 import com.jbidwatcher.auction.*;
+import com.jbidwatcher.scripting.Scripting;
 
 import java.util.*;
 import java.net.*;
@@ -32,18 +34,17 @@ import java.io.*;
 
 public abstract class AuctionServer implements AuctionServerInterface {
   private static long sLastUpdated = 0;
-
-  public String stripId(String source) {
-    String strippedId = source;
-
-    if (source.startsWith("http")) {
-      strippedId = extractIdentifierFromURLString(source);
-    }
-
-    return strippedId;
-  }
+  protected EntryCorral entryCorral;
+  protected SearchManager searcher;
 
   private static class ReloadItemException extends Exception { }
+
+  /**
+   * Just a friendlier wrapper for the pair.
+   */
+  private class ParseResults extends Pair<AuctionInfo, ItemParser.ParseErrors> {
+    private ParseResults(AuctionInfo info, ItemParser.ParseErrors parseErrors) { super(info, parseErrors); }
+  }
 
   //  Note: JBidProxy
   public abstract CookieJar getNecessaryCookie(boolean force);
@@ -98,25 +99,17 @@ public abstract class AuctionServer implements AuctionServerInterface {
   protected abstract Date getOfficialTime();
 
   /**
-   * @brief Given a site-dependant item ID, get the URL for that item.
-   *
-   * @param itemID - The eBay item ID to get a net.URL for.
-   *
-   * @return - a URL to use to pull that item.
-   */
-  protected URL getURLFromItem(String itemID) {
-    return StringTools.getURLFromString(getStringURLFromItem(itemID));
-  }
-
-  /**
    * Get the full text of an auction from the auction server.
    *
    * @param id - The item id for the item to retrieve from the server.
-   *
    * @return - The full text of the auction from the server, or null if it wasn't found.
    * @throws java.io.FileNotFoundException - If the auction is gone from the server.
    */
   protected abstract StringBuffer getAuction(String id) throws FileNotFoundException;
+
+  protected abstract ItemParser getItemParser(StringBuffer sb, AuctionEntry ae, String item_id);
+
+  protected abstract String getUserId();
 
   /**
    * @brief Get the current time inline with the current thread.  This will
@@ -135,7 +128,7 @@ public abstract class AuctionServer implements AuctionServerInterface {
   //  -----------------
   //  Note: AuctionEntry
   public AuctionInfo create(String itemId) {
-    return loadAuction(itemId, null);
+    return load(itemId, null);
   }
 
   /**
@@ -184,26 +177,133 @@ public abstract class AuctionServer implements AuctionServerInterface {
    * @return - The core auction information that has been set into the
    * auction entry, or null if the update failed.
    */
-  public void reload(String auctionId) {
-    AuctionEntry ae = (AuctionEntry) EntryCorral.getInstance().takeForWrite(auctionId);
-    SpecificAuction curAuction;
+  public AuctionInfo reload(String auctionId) {
+    AuctionEntry ae = (AuctionEntry) entryCorral.takeForWrite(auctionId);
     try {
-      curAuction = (SpecificAuction) loadAuction(auctionId, ae);
+      AuctionInfo ai = ae.getAuction();
 
-      if (curAuction != null) {
-        curAuction.saveDB();
-        ae.setAuctionInfo(curAuction);
+      Map<String, Object> r = rubyUpdate(auctionId, ae.getLastUpdated());
+      if (r != null && !r.isEmpty()) {
+        ai.setMonetary("curBid", Currency.getCurrency((String) r.get("current_price")));
+        ai.setBoolean("ended", (Boolean) r.get("ended"));
+        ai.setNumBids(((Long) r.get("bid_count")).intValue());
+        ai.setDate("end", new Date((Long) r.get("end_date")));
+
+        ai.saveDB();
+        ae.setAuctionInfo(ai);
         ae.clearInvalid();
         MQFactory.getConcrete("Swing").enqueue("LINK UP");
+        return ai;
       } else {
-        if(!ae.isDeleted() && !ae.getLastStatus().contains("Seller away - item unavailable.")) {
-          ae.setLastStatus("Failed to load from server!");
-          ae.setInvalid();
+        AuctionInfo curAuction;
+        curAuction = load(auctionId, ae);
+
+        if (curAuction != null) {
+          curAuction.saveDB();
+          ae.setAuctionInfo(curAuction);
+          ae.clearInvalid();
+          MQFactory.getConcrete("Swing").enqueue("LINK UP");
+          return curAuction;
+        } else {
+          if (!ae.isDeleted() && !ae.getLastStatus().contains("Seller away - item unavailable.")) {
+            ae.setLastStatus("Failed to load from server!");
+            ae.setInvalid();
+          }
+          return null;
         }
       }
     } finally {
-      EntryCorral.getInstance().release(auctionId);
+      entryCorral.release(auctionId);
     }
+  }
+
+  public ParseResults parseAuction(ItemParser itemParser, AuctionEntry ae) {
+    String sellerName = null;
+    SpecificAuction auction = getNewSpecificAuction();
+    AuctionInfo output = auction;
+
+    if (ae != null) {
+      output = ae.getAuction();
+      sellerName = ae.getSellerName();
+    }
+
+    Record parse = itemParser.parseItemDetails();
+
+    ItemParser.ParseErrors setResult = auction.setFields(parse, sellerName);
+    if (setResult == ItemParser.ParseErrors.SELLER_AWAY) {
+      if (ae != null) {
+        ae.setLastStatus("Seller away - item unavailable.");
+      }
+    }
+
+    if (setResult == ItemParser.ParseErrors.SUCCESS) {
+      if(output != auction) {
+        Record newBacking = auction.getBacking();
+
+        for (String key : newBacking.keySet()) {
+          output.set(key, newBacking.get(key));
+        }
+      }
+    }
+
+    return new ParseResults(output, setResult);
+  }
+
+  public AuctionInfo doParse(StringBuffer sb) throws ReloadItemException {
+    return doParse(sb, null, null);
+  }
+
+  public Map<String, Object> rubyUpdate(String auctionId, Date lastUpdatedAt) {
+    long before = System.currentTimeMillis();
+    try {
+      Map<String, Object> maps = (Map<String, Object>) Scripting.rubyMethod("get_update", auctionId, lastUpdatedAt);
+      if (maps != null) {
+        String timerLog = "Ruby took " + (System.currentTimeMillis() - before) + "ms";
+        JConfig.log().logMessage(timerLog);
+        return maps;
+      }
+    } catch (Exception e) {
+      JConfig.log().logMessage("Could not parse easy-update.  Using complex update.");
+    }
+    String timerLog = "Ruby took " + (System.currentTimeMillis() - before) + "ms, and failed.";
+    JConfig.log().logMessage(timerLog);
+    return null;
+  }
+
+  public Record tryRuby(StringBuffer sb) {
+    long before = System.currentTimeMillis();
+    Record rubyResults = null;
+    try {
+      Map<String, String> maps = (Map<String, String>) Scripting.rubyMethod("parse", sb.toString());
+      if (maps != null) {
+        rubyResults = new Record();
+        rubyResults.putAll(maps);
+      }
+    } catch (Exception e) {
+      e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+    }
+    System.out.println("Ruby took " + (System.currentTimeMillis() - before));
+    return rubyResults;
+  }
+
+  /**
+   * Check to see if the provided user name is the current app user.
+   *
+   * @param username - The username to check.
+   * @return - false if username is null, or if the current user is the 'default' user, or if the username provided is different
+   * than the current username.  True if the current app user is the same as the username passed in.
+   */
+  public boolean isCurrentUser(String username) {
+    return !(username == null || isDefaultUser()) && getUserId().trim().equalsIgnoreCase(username.trim());
+  }
+
+  /**
+   * @param itemID - The eBay item ID to get a net.URL for.
+   * @return - a URL to use to pull that item.
+   * @brief Given a site-dependant item ID, get the URL for that item.
+   */
+  protected URL getURLFromItem(String itemID) {
+    return StringTools.getURLFromString(getStringURLFromItem(itemID));
   }
 
   /**
@@ -214,9 +314,9 @@ public abstract class AuctionServer implements AuctionServerInterface {
    *
    * @return - An object containing the information extracted from the auction.
    */
-  private AuctionInfo loadAuction(String item_id, AuctionEntry ae) {
+  private AuctionInfo load(String item_id, AuctionEntry ae) {
     StringBuffer sb = null;
-    SpecificAuction curAuction = null;
+    AuctionInfo curAuction = null;
     int runCount = 0;
 
     // Retry loop
@@ -239,6 +339,7 @@ public abstract class AuctionServer implements AuctionServerInterface {
 
     if (curAuction == null) {
       JConfig.log().logMessage("Multiple failures attempting to load item " + item_id + ", giving up.");
+      JConfig.getMetrics().trackEventValue("item", "loadfailure", item_id);
 
       if (ae != null && ae.getLastStatus().contains("Seller away - item unavailable.")) {
         ae.setInvalid();
@@ -272,80 +373,79 @@ public abstract class AuctionServer implements AuctionServerInterface {
     return sb;
   }
 
-  public SpecificAuction doParse(StringBuffer sb) throws ReloadItemException {
-    return doParse(sb, null, null);
-  }
+  private AuctionInfo doParse(StringBuffer sb, AuctionEntry ae, String item_id) throws ReloadItemException {
+    ItemParser itemParser = getItemParser(sb, ae, item_id);
 
-  private SpecificAuction doParse(StringBuffer sb, AuctionEntry ae, String item_id) throws ReloadItemException {
-    SpecificAuction curAuction = getNewSpecificAuction();
+    ParseResults parse = parseAuction(itemParser, ae);
+    AuctionInfo curAuction = parse.getFirst();
+    if(parse.getLast() == ItemParser.ParseErrors.SUCCESS) {      //  HAPPY PATH!
+      //  Override the detected item id, if one was provided.
+      if(item_id != null) {
+        curAuction.setIdentifier(item_id);
+      } else if(ae != null && ae.getIdentifier() != null) {
+        curAuction.setIdentifier(ae.getIdentifier());
+      }
+      curAuction.setContent(sb, false);
 
-    if (item_id != null) {
-      curAuction.setIdentifier(item_id);
-    } else if(ae != null && ae.getIdentifier() != null) {
-      curAuction.setIdentifier(ae.getIdentifier());
-    }
-    curAuction.setContent(sb, false);
-    String error = null;
-    SpecificAuction.ParseErrors result = null;
-    if (curAuction.preParseAuction()) {
-      result = curAuction.parseAuction(ae);
-      if (result != SpecificAuction.ParseErrors.SUCCESS) {
-        switch(result) {
-          case WRONG_SITE: {
-            String rightURL = curAuction.getURL();
-            JConfig.log().logDebug("Need to redirect to: " + rightURL);
-            JConfig.log().logMessage("Attempted to read an auction that is not available on the default site; check eBay's non-US configuration.");
-            return null;
-          }
-          case CAPTCHA: {
-            JConfig.log().logDebug("Failed to load (likely adult) item, captcha intervened.");
-            if(ae != null) {
-              ae.setLastStatus("Couldn't access auction on server; captcha blocked.");
-            }
-            break;
-          }
-          case NOT_ADULT: {
-            boolean isAdult = JConfig.queryConfiguration(getName() + ".mature", "false").equals("true");
-            if (isAdult) {
-              getNecessaryCookie(true);
-              throw new ReloadItemException();
-            } else {
-              JConfig.log().logDebug("Failed to load adult item, user possibly not marked for Mature Items access.  Check your eBay configuration.");
-            }
-            break;
-          }
-          case DELETED: {
-            error = markAuctionDeleted(ae);
-            break;
-          }
-          case SELLER_AWAY: {
-            error = "Seller away - item unavailable.";
-            break;
-          }
-          case BAD_TITLE: {
-            error = "There was a problem parsing the title.";
-            break;
-          }
-        }
-        if(result != SpecificAuction.ParseErrors.SUCCESS && error == null) {
-          error = "Bad Parse!";
-        }
-      }
-      if (result == SpecificAuction.ParseErrors.SUCCESS) {
-        curAuction.save();
-      }
+      curAuction.save();
     } else {
-      error = "Bad pre-parse!";
-    }
-
-    if(error != null) {
+      String error = checkParseError(ae, parse.getLast());
       JConfig.log().logMessage(error);
-      if(ae == null || !ae.isDeleted() && result != SpecificAuction.ParseErrors.SELLER_AWAY) {
+      if (ae == null || !ae.isDeleted() && parse.getLast() != ItemParser.ParseErrors.SELLER_AWAY) {
         checkLogError(ae);
       }
+
       curAuction = null;
     }
+
     return curAuction;
+  }
+
+  private String checkParseError(AuctionEntry ae, ItemParser.ParseErrors result) throws ReloadItemException {
+    String error = null;
+
+    switch(result) {
+      case WRONG_SITE: {
+        JConfig.log().logMessage("Attempted to read an auction that is not available on the default site; check eBay's non-US configuration.");
+        error = "Auction is not available on the used site.";
+        break;
+      }
+      case CAPTCHA: {
+        JConfig.log().logDebug("Failed to load (likely adult) item, captcha intervened.");
+        if(ae != null) {
+          ae.setLastStatus("Couldn't access auction on server; captcha blocked.");
+        }
+        error = "Couldn't access auction on server; captcha blocked.";
+        break;
+      }
+      case NOT_ADULT: {
+        boolean isAdult = JConfig.queryConfiguration(getName() + ".mature", "false").equals("true");
+        if (isAdult) {
+          getNecessaryCookie(true);
+          throw new ReloadItemException();
+        } else {
+          JConfig.log().logDebug("Failed to load adult item, user possibly not marked for Mature Items access.  Check your eBay configuration.");
+          error = "Failed to load mature audiences item.";
+        }
+        break;
+      }
+      case DELETED: {
+        error = markAuctionDeleted(ae);
+        break;
+      }
+      case SELLER_AWAY: {
+        error = "Seller away - item unavailable.";
+        break;
+      }
+      case BAD_TITLE: {
+        error = "There was a problem parsing the title.";
+        break;
+      }
+    }
+    if(result != ItemParser.ParseErrors.SUCCESS && error == null) {
+      error = "Bad Parse!";
+    }
+    return error;
   }
 
   private String markAuctionDeleted(AuctionEntry ae) {
@@ -383,16 +483,13 @@ public abstract class AuctionServer implements AuctionServerInterface {
     }
   }
 
-  protected abstract String getUserId();
+  public String stripId(String source) {
+    String strippedId = source;
 
-  /**
-   * Check to see if the provided user name is the current app user.
-   *
-   * @param username - The username to check.
-   * @return - false if username is null, or if the current user is the 'default' user, or if the username provided is different
-   * than the current username.  True if the current app user is the same as the username passed in.
-   */
-  public boolean isCurrentUser(String username) {
-    return !(username == null || isDefaultUser()) && getUserId().trim().equalsIgnoreCase(username.trim());
+    if (source.startsWith("http")) {
+      strippedId = extractIdentifierFromURLString(source);
+    }
+
+    return strippedId;
   }
 }

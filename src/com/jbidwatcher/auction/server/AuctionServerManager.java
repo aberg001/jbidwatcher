@@ -5,19 +5,16 @@ package com.jbidwatcher.auction.server;
  * Developed by mrs (Morgan Schweers)
  */
 
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import com.jbidwatcher.util.Constants;
 import com.jbidwatcher.util.PauseManager;
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.queue.MessageQueue;
 import com.jbidwatcher.search.SearchManager;
-import com.jbidwatcher.util.xml.XMLElement;
-import com.jbidwatcher.util.xml.XMLParseException;
-import com.jbidwatcher.util.xml.XMLSerialize;
-import com.jbidwatcher.util.xml.XMLInterface;
 import com.jbidwatcher.util.config.JConfig;
 import com.jbidwatcher.util.StringTools;
 import com.jbidwatcher.auction.*;
-import com.jbidwatcher.auction.AuctionServerInterface;
 
 import java.util.*;
 
@@ -26,65 +23,23 @@ import java.util.*;
  * JBidwatcher is not used on any other auction sites than eBay, and hasn't
  * been for many years.
  */
-public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener, Resolver {
-  private final static AuctionServerManager mInstance;
-  private static EntryManager sEntryManager = null;
+@Singleton
+public class AuctionServerManager implements MessageQueue.Listener, Resolver {
+  private final EntryFactory entryFactory;
+  private EntryManager entryManager = null;
   private AuctionServer mServer = null;
-  private static SearchManager mSearcher;
+  private SearchManager searcher;
+  private PauseManager pauseManager;
 
-  static {
-    mInstance = new AuctionServerManager();
-    mSearcher = SearchManager.getInstance();
+  @Inject
+  private AuctionServerManager(EntryManager entryManager, SearchManager searcher, EntryFactory entryFactory, PauseManager pauseManager) {
+    this.entryManager = entryManager;
+    this.searcher = searcher;
+    this.entryFactory = entryFactory;
+    this.pauseManager = pauseManager;
 
-    MQFactory.getConcrete("auction_manager").registerListener(mInstance);
-  }
-
-  public static void setEntryManager(EntryManager newEM) { sEntryManager = newEM; }
-
-  private AuctionServerManager() { }
-
-  /**
-   * @brief Load all the auction servers.
-   *
-   * BUGBUG - Refactor this to use the XMLSerializeSimple if at all possible!
-   *
-   * @param inXML - The XML source to load from.
-   * @noinspection ThrowInsideCatchBlockWhichIgnoresCaughtException,StringContatenationInLoop
-   */
-  public void fromXML(XMLInterface inXML) {
-    Iterator<XMLInterface> serversStep = inXML.getChildren();
-
-    while(serversStep.hasNext()) {
-      XMLInterface perServer = serversStep.next();
-      //  Only process the 'server' entries.
-      if(perServer.getTagName().equals("server")) {
-        AuctionServer newServer = null;
-        String serverName = perServer.getProperty("NAME", null);
-        if(serverName != null) {
-          newServer = getServer();
-          if(newServer == null) {
-            try {
-              Class<?> newClass = Class.forName(serverName + "Server");
-              newServer = (AuctionServer) newClass.newInstance();
-              newServer = setServer(newServer);
-            } catch(ClassNotFoundException cnfe) {
-              JConfig.log().handleException("Failed to load controller class for server " + serverName + '.', cnfe);
-              throw new XMLParseException(inXML.getTagName(), "Failed to load controller class for server " + serverName + '.');
-            } catch(InstantiationException ie) {
-              JConfig.log().handleException("Failed to instantiate server " + serverName + '.', ie);
-              throw new XMLParseException(inXML.getTagName(), "Failed to instantiate server for " + serverName + '.');
-            } catch(IllegalAccessException iae) {
-              JConfig.log().handleException("Illegal access when instantiating server for " + serverName + '.', iae);
-              throw new XMLParseException(inXML.getTagName(), "Illegal access when instantiating server for " + serverName + '.');
-            }
-          }
-        }
-
-        if (newServer != null) {
-          getServerAuctionEntries(newServer, perServer);
-        }
-      }
-    }
+    this.entryFactory.setResolver(this);
+    MQFactory.getConcrete("auction_manager").registerListener(this);
   }
 
   private Map<String, Long> timingLog = new HashMap<String, Long>();
@@ -239,12 +194,12 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
         if(lostAuctions != null && !lostAuctions.isEmpty()) {
           JConfig.log().logMessage("Recovering " + lostAuctions.size() + " listings.");
           for (AuctionInfo ai : lostAuctions) {
-            AuctionEntry ae = EntryFactory.getInstance().constructEntry();
+            AuctionEntry ae = entryFactory.constructEntry();
             ae.setAuctionInfo(ai);
             ae.setCategory("recovered");
             ae.setSticky(true);
             ae.setNeedsUpdate();
-            sEntryManager.addEntry(ae);
+            entryManager.addEntry(ae);
           }
           MQFactory.getConcrete("recovered Tab").enqueue("REPORT These auctions had lost their settings.");
           MQFactory.getConcrete("recovered Tab").enqueue("SHOW");
@@ -284,7 +239,7 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
         timeStart("addEntry");
         timeStart("addEntry-" + ae.getCategory());
         try {
-          sEntryManager.addEntry(ae);
+          entryManager.addEntry(ae);
         } catch(Exception e) {
           String errorMessage = "Failed to add an auction entry";
           errorMessage += " for item " + ae.getIdentifier() + " (" + ae.getId() + ") ";
@@ -294,28 +249,6 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
         timeStop("addEntry");
       }
       if(r != null) r.report(ae, count++);
-    }
-  }
-
-  private void getServerAuctionEntries(AuctionServer newServer, XMLInterface perServer) {
-    try {
-      Iterator<XMLInterface> entryStep = perServer.getChildren();
-      int count = 0;
-      while (entryStep.hasNext()) {
-        XMLInterface perEntry = entryStep.next();
-        AuctionEntry ae = EntryFactory.getInstance().constructEntry();
-
-        ae.setServer(newServer);
-        ae.fromXML(perEntry);
-        ae.saveDB();
-
-        if (sEntryManager != null) {
-          sEntryManager.addEntry(ae);
-        }
-        MQFactory.getConcrete("splash").enqueue("SET " + count++);
-      }
-    } catch(XMLParseException e) {
-      JConfig.log().handleException("Parse exception: ", e);
     }
   }
 
@@ -329,7 +262,7 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
     String cmd = (String)deQ;
 
     if(cmd.equals("TIMECHECK")) {
-      if(PauseManager.getInstance().isPaused()) {
+      if(pauseManager.isPaused()) {
         //  Punt, and let the time drift until the next update.
         return;
       }
@@ -348,40 +281,6 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
     return defaultServer.getTime();
   }
 
-  public XMLElement toXML() {
-    XMLElement xmlResult = new XMLElement("auctions");
-    XMLElement serverChild = new XMLElement("server");
-    List<AuctionEntry> entryList = AuctionEntry.findAll();//TODO EntryCorral these?
-
-    if (entryList == null || entryList.isEmpty()) return null;
-
-    serverChild.setProperty("name", mServer.getName());
-
-    int aucCount = 0;
-    aucCount += entryList.size();
-
-    for (AuctionEntry ae : entryList) {
-      try {
-        serverChild.addChild(ae.toXML());
-      } catch (Exception e) {
-        try {
-        JConfig.log().handleException("Exception trying to save auction " + ae.getIdentifier() + " (" + ae.getTitle() + ") -- Not saving", e);
-        } catch(Exception e2) {
-          JConfig.log().handleException("Exception trying to save auction entry id " + ae.getId() + " -- Not saving", e);
-        }
-      }
-    }
-
-    xmlResult.addChild(serverChild);
-    xmlResult.setProperty("count", Integer.toString(aucCount));
-
-    return xmlResult;
-  }
-
-  public static AuctionServerManager getInstance() {
-    return mInstance;
-  }
-
   public AuctionServer setServer(AuctionServer aucServ) {
     if(mServer != null) {
       //noinspection ThrowableInstanceNeverThrown
@@ -391,7 +290,7 @@ public class AuctionServerManager implements XMLSerialize, MessageQueue.Listener
     }
     mServer = aucServ;
 
-    mServer.addSearches(mSearcher);
+    mServer.addSearches(searcher);
     return(mServer);
   }
 

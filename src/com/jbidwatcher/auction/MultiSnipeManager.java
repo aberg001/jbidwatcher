@@ -1,9 +1,10 @@
 package com.jbidwatcher.auction;
 
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import com.jbidwatcher.util.db.ActiveRecord;
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.queue.MessageQueue;
-import com.jbidwatcher.util.xml.XMLElement;
 
 /**
  * Created by IntelliJ IDEA.
@@ -12,24 +13,13 @@ import com.jbidwatcher.util.xml.XMLElement;
  * Time: 12:25 AM
  * To change this template use File | Settings | File Templates.
  */
+@Singleton
 public class MultiSnipeManager {
-  private static MultiSnipeManager ourInstance = new MultiSnipeManager();
+  private final EntryCorral entryCorral;
 
-  public static MultiSnipeManager getInstance() {
-    return ourInstance;
-  }
-
-  private MultiSnipeManager() {
-    MQFactory.getConcrete("multisnipe_xml").registerListener(new MessageQueue.Listener() {
-      public void messageAction(Object deQ) {
-        String idXMLPair = (String)deQ;
-        String identifier = idXMLPair.substring(0, idXMLPair.indexOf(' '));
-        XMLElement element = new XMLElement();
-        element.parseString(idXMLPair, identifier.length() + 1);
-        MultiSnipe ms = MultiSnipe.loadFromXML(element);
-        addAuctionToMultisnipe(identifier, ms);
-      }
-    });
+  @Inject
+  private MultiSnipeManager(EntryCorral corral) {
+    entryCorral = corral;
 
     MQFactory.getConcrete("won").addListener(new MessageQueue.Listener() {
       /**
@@ -76,14 +66,8 @@ public class MultiSnipeManager {
   }
 
   public MultiSnipe getForAuctionIdentifier(String identifier) {
-    ActiveRecord hash = EntryCorral.getInstance().takeForRead(identifier);
+    ActiveRecord hash = entryCorral.takeForRead(identifier);
     Integer multisnipeId = hash.getInteger("multisnipe_id");
     return multisnipeId == null ? null : MultiSnipe.find(multisnipeId);
-  }
-
-  public void addXMLToMultisnipe(String identifier, XMLElement xmlElement) {
-    MultiSnipe ms = MultiSnipe.loadFromXML(xmlElement);
-    ms.saveDB();
-    addAuctionToMultisnipe(identifier, ms);
   }
 }

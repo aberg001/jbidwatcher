@@ -5,10 +5,14 @@ package com.jbidwatcher.ui;
  * Developed by mrs (Morgan Schweers)
  */
 
+import com.google.inject.Inject;
+
 import javax.swing.*;
 import java.awt.event.MouseEvent;
 
 public class JBidFrameMouse extends JBidTableContext {
+  private final JTabManager tabManager;
+
   private JPopupMenu constructFramePopup() {
     JPopupMenu myPopup = new JPopupMenu();
 
@@ -24,10 +28,13 @@ public class JBidFrameMouse extends JBidTableContext {
   }
 
   protected void internalDoubleClick(MouseEvent e) {
-    JTabManager.getInstance().deselect();
+    tabManager.deselect();
   }
 
-  public JBidFrameMouse() {
+  @Inject
+  public JBidFrameMouse(JTabManager tabManager, ListManager listManager) {
+    super(tabManager, listManager);
+    this.tabManager = tabManager;
     localPopup = constructFramePopup();
   }
 }

@@ -18,6 +18,8 @@ import java.util.*;
 import java.util.List;
 
 public class SearchInfoDialog extends BasicDialog {
+  private final SearchManager searchManager;
+  private final ListManager listManager;
   private JComboBox searchTypeBox;
   private JTextField searchNameField;
   private JComboBox periodList;
@@ -61,8 +63,10 @@ public class SearchInfoDialog extends BasicDialog {
     return curToId.get(currencyBox.getSelectedItem().toString());
   }
 
-  public SearchInfoDialog() {
+  public SearchInfoDialog(SearchManager searchManager, ListManager listManager, JPasteListener pasteListener) {
     super();
+    this.searchManager = searchManager;
+    this.listManager = listManager;
     JConfig.setConfiguration("ebay.currencySearch.0", "All");
     JConfig.setConfiguration("ebay.currencySearch.1", "U.S. dollar");
     JConfig.setConfiguration("ebay.currencySearch.2", "Canadian dollar");
@@ -74,14 +78,14 @@ public class SearchInfoDialog extends BasicDialog {
     JConfig.setConfiguration("ebay.currencySearch.13", "Swiss franc");
 
     addBehavior();
-    setupUI();
+    setupUI(pasteListener);
     setModal(true);
   }
 
   protected void onOK() {
     if(curSearch == null) {
-      curSearch = SearchManager.getInstance().buildSearch(System.currentTimeMillis(), getSearchType(), getName(), getSearch(), Constants.EBAY_SERVER_NAME, getCurrency(), -1);
-      SearchManager.getInstance().addSearch(curSearch);
+      curSearch = searchManager.buildSearch(System.currentTimeMillis(), getSearchType(), getName(), getSearch(), Constants.EBAY_SERVER_NAME, getCurrency(), -1);
+      searchManager.addSearch(curSearch);
     } else {
       curSearch.setName(getName());
       curSearch.setSearch(getSearch());
@@ -140,13 +144,6 @@ public class SearchInfoDialog extends BasicDialog {
     curSearch = s;
   }
 
-  public static void main(String[] args) {
-    SearchInfoDialog dialog = new SearchInfoDialog();
-    dialog.pack();
-    dialog.setVisible(true);
-    System.exit(0);
-  }
-
   private JPanel boxUp(Component a, Component b) {
     JPanel newBox = new JPanel();
     newBox.setLayout(new BoxLayout(newBox, BoxLayout.X_AXIS));
@@ -156,7 +153,7 @@ public class SearchInfoDialog extends BasicDialog {
     return newBox;
   }
 
-  private void setupUI() {
+  private void setupUI(JPasteListener pasteListener) {
     final JPanel panel3 = new JPanel();
     panel3.setLayout(new BorderLayout());
 
@@ -165,7 +162,7 @@ public class SearchInfoDialog extends BasicDialog {
 
     final JLabel label1 = new JLabel("Search Name: ");
     searchNameField = new JTextField(12);
-    searchNameField.addMouseListener(JPasteListener.getInstance());
+    searchNameField.addMouseListener(pasteListener);
 
     final JLabel label2 = new JLabel(" Search Type: ");
     searchTypeBox = new JComboBox(_search_types);
@@ -181,7 +178,7 @@ public class SearchInfoDialog extends BasicDialog {
 
     final JLabel searchLabel = new JLabel("Search: ");
     searchField = new JTextField(40);
-    searchField.addMouseListener(JPasteListener.getInstance());
+    searchField.addMouseListener(pasteListener);
 
     final JLabel tabLabel = new JLabel("Destination Tab: ");
 
@@ -226,7 +223,7 @@ public class SearchInfoDialog extends BasicDialog {
     tabList.removeAllItems();
     tabList.setEditable(true);
 
-    List<String> tabs = ListManager.getInstance().allCategories();
+    List<String> tabs = listManager.allCategories();
     if(tabs != null) {
       tabs.remove("complete");
       tabs.remove("selling");

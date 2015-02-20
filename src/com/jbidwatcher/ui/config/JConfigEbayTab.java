@@ -5,22 +5,16 @@ import com.jbidwatcher.ui.commands.UserActions;
 import com.jbidwatcher.util.config.JConfig;
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.queue.AuctionQObject;
-import com.jbidwatcher.util.queue.MessageQueue;
 import com.jbidwatcher.util.Constants;
 import com.jbidwatcher.ui.util.JPasteListener;
 import com.jbidwatcher.ui.util.OptionUI;
 import com.jbidwatcher.ui.util.JBEditorPane;
-import com.jbidwatcher.auction.server.AuctionServerManager;
 import com.jbidwatcher.util.queue.SuperQueue;
 
 import javax.swing.*;
 import java.awt.BorderLayout;
 import java.awt.event.ActionListener;
 import java.awt.event.ActionEvent;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
 
 /**
  * User: Morgan
@@ -38,6 +32,7 @@ public class JConfigEbayTab extends JConfigTab
   private String mDisplayName;
   //  mSitename is only used to look up configuration values.
   private String mSitename = Constants.EBAY_SERVER_NAME;
+  private String friendlyName;
 
   public String getTabName() { return mDisplayName; }
   public void cancel() { }
@@ -58,7 +53,7 @@ public class JConfigEbayTab extends JConfigTab
 
     if(old_pass == null || !new_pass.equals(old_pass) ||
        old_user == null || !new_user.equals(old_user)) {
-      MQFactory.getConcrete(AuctionServerManager.getInstance().getServer().getFriendlyName()).enqueueBean(new AuctionQObject(AuctionQObject.MENU_CMD, "Update login cookie", null));
+      MQFactory.getConcrete(friendlyName).enqueueBean(new AuctionQObject(AuctionQObject.MENU_CMD, "Update login cookie", null));
     }
 
     if(homeSite != null) {
@@ -87,19 +82,19 @@ public class JConfigEbayTab extends JConfigTab
     }
   }
 
-  private JPanel buildUsernamePanel() {
+  private JPanel buildUsernamePanel(JPasteListener pasteListener) {
     JPanel tp = new JPanel();
 
     tp.setBorder(BorderFactory.createTitledBorder("eBay User ID"));
     tp.setLayout(new BorderLayout());
     username = new JTextField();
-    username.addMouseListener(JPasteListener.getInstance());
+    username.addMouseListener(pasteListener);
 
     username.setText(JConfig.queryConfiguration(mSitename + ".user", "default"));
     username.setEditable(true);
     username.getAccessibleContext().setAccessibleName("User name to log into eBay");
     password = new JPasswordField(JConfig.queryConfiguration(mSitename + ".password"));
-    password.addMouseListener(JPasteListener.getInstance());
+    password.addMouseListener(pasteListener);
     password.setEditable(true);
 
     //  Get the password from the configuration entry!  FIX
@@ -129,8 +124,8 @@ public class JConfigEbayTab extends JConfigTab
     siteBox.add(Box.createHorizontalGlue());
     tp.add(siteBox);
     String nonUSNotice = "<html><body><div style=\"margin-left: 7px; font-size: 0.96em;\"<i>If this is checked, JBidwatcher will " +
-                         "use <b>ebay.co.uk</b> as the source of auctions<br>and destination for placing bids. Otherwise, <b>ebay.com</b> " +
-                         "will be used.";
+        "use <b>ebay.co.uk</b> as the source of auctions<br>and destination for placing bids. Otherwise, <b>ebay.com</b> " +
+        "will be used.";
     JBEditorPane jep = OptionUI.getHTMLLabel(nonUSNotice);
     tp.add(jep);
 
@@ -177,13 +172,14 @@ public class JConfigEbayTab extends JConfigTab
     return tp;
   }
 
-  public JConfigEbayTab(boolean isQuickConfig) {
+  public JConfigEbayTab(boolean isQuickConfig, JPasteListener pasteListener, String friendlyName) {
+    this.friendlyName = friendlyName;
     quickConfig = isQuickConfig;
     mDisplayName = Constants.EBAY_DISPLAY_NAME;
     setLayout(new BorderLayout());
     JPanel jp = new JPanel();
     jp.setLayout(new BorderLayout());
-    jp.add(panelPack(buildUsernamePanel()), BorderLayout.NORTH);
+    jp.add(panelPack(buildUsernamePanel(pasteListener)), BorderLayout.NORTH);
     if(!quickConfig) {
       jp.add(panelPack(buildBrowseTargetPanel()), BorderLayout.CENTER);
       add(jp, BorderLayout.NORTH);

@@ -1,10 +1,15 @@
 package com.jbidwatcher.ui;
 
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import com.jbidwatcher.util.config.JConfig;
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.Task;
 import com.jbidwatcher.auction.AuctionEntry;
 
+import javax.swing.*;
+import javax.swing.table.TableModel;
+import javax.swing.table.TableRowSorter;
 import java.util.*;
 import java.awt.Color;
 import java.awt.Component;
@@ -17,10 +22,11 @@ import java.awt.Component;
  *
  * Trying to split up the list management code from FilterManager's other duties.
  */
+@Singleton
 public class ListManager {
   private final Map<String, AuctionListHolder> mCategoryMap;
-  private static ListManager sInstance = null;
 
+  @Inject
   private ListManager() {
     // the LinkedHashMap fixes the random order of tabs
     mCategoryMap = Collections.synchronizedMap(new LinkedHashMap<String, AuctionListHolder>(3));
@@ -100,7 +106,14 @@ public class ListManager {
 
     for (AuctionListHolder step : categories) {
       // getSortProperties must be called first in order to restore original column names
-      step.getUI().getTableSorter().getSortProperties(step.getList().getName(), outProps);
+      JTable table = step.getUI().getTable();
+      TableRowSorter<TableModel> sorter = step.getUI().getTableSorter();
+      TableModel model = sorter.getModel();
+      for(int j=0; j<model.getColumnCount(); j++) {
+        int viewIndex = table.convertColumnIndexToView(j);
+        // TODO(cyberfox) - Add sort properties from sorter to outProps.
+      }
+//      step.getUI().getTableSorter().getSortProperties(step.getList().getName(), outProps);
       step.getUI().getColumnWidthsToProperties(outProps);
 
       String tab = step.getList().getName();
@@ -125,13 +138,6 @@ public class ListManager {
   AuctionListHolder add(AuctionListHolder newList) {
     mCategoryMap.put(newList.getList().getName(), newList);
     return newList;
-  }
-
-  public static ListManager getInstance() {
-    if (sInstance == null) {
-      sInstance = new ListManager();
-    }
-    return sInstance;
   }
 
   /**

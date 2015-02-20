@@ -6,27 +6,31 @@ package com.jbidwatcher.ui;
  */
 
 import com.cyberfox.util.platform.Platform;
+import com.jbidwatcher.ui.util.JPasteListener;
 import com.jbidwatcher.util.config.JConfig;
 import com.jbidwatcher.util.Constants;
 import com.jbidwatcher.search.SearchManager;
 import com.jbidwatcher.search.Searcher;
 import com.jbidwatcher.ui.table.SearchTableModel;
-import com.jbidwatcher.ui.table.TableSorter;
 import com.jbidwatcher.ui.util.JBidFrame;
 
 import java.awt.event.*;
 import javax.swing.*;
+import javax.swing.table.TableModel;
+import javax.swing.table.TableRowSorter;
 import java.awt.*;
 
 public class SearchFrame implements ActionListener {
-  JFrame mainFrame;
-  JComboBox newType;
-  JTextField searchString;
-  SearchTableModel _stm;
-  TableSorter _ts;
+  private JFrame mainFrame;
+  private JComboBox newType;
+  private JTextField searchString;
+  private SearchTableModel _stm;
+  private final SearchManager searchManager;
 
-  public SearchFrame() {
-    mainFrame = createSearchFrame();
+  public SearchFrame(SearchManager searchManager, JTabManager tabManager, ListManager listManager, JPasteListener pasteListener) {
+    this.searchManager = searchManager;
+    mainFrame = createSearchFrame(searchManager, tabManager, listManager, pasteListener);
+
     Dimension screensize = Toolkit.getDefaultToolkit().getScreenSize();
     int height = Math.min(305, screensize.height / 2);
     int width = Math.min(566, screensize.width / 2);
@@ -56,12 +60,12 @@ public class SearchFrame implements ActionListener {
     JConfig.setAuxConfiguration("searches.height", Integer.toString(mainFrame.getHeight()));
   }
 
-  public JFrame createSearchFrame() {
+  private JFrame createSearchFrame(final SearchManager searchManager, JTabManager tabManager, ListManager listManager, JPasteListener pasteListener) {
     JPanel wholePanel = new JPanel(new BorderLayout(), true);
     JPanel subPanel = new JPanel(new BorderLayout(), true);
     JPanel buttonPanel = new JPanel(new BorderLayout(), true);
     Box buttonBox = Box.createHorizontalBox();
-    JSearchContext jsc = new JSearchContext();
+    JSearchContext jsc = new JSearchContext(searchManager, tabManager, listManager, pasteListener);
 
     final JFrame w = new JBidFrame("Search Manager");
 
@@ -96,7 +100,7 @@ public class SearchFrame implements ActionListener {
     w.addWindowListener(new WindowAdapter() {
       public void windowClosing(WindowEvent we) {
         savePosition();
-        SearchManager.getInstance().saveSearches();
+        searchManager.saveSearches();
       }
 
       public void windowIconified(WindowEvent we) {
@@ -133,10 +137,12 @@ public class SearchFrame implements ActionListener {
     return w;
   }
 
+  private JTable searchTable;
+
   private JScrollPane buildSearchTable(JSearchContext jsc) {
-    _stm = new SearchTableModel();
-    _ts = new TableSorter("search", "Name", _stm);
-    JTable searchTable = new JTable(_ts);
+    _stm = new SearchTableModel(searchManager);
+    searchTable = new JTable(_stm);
+    searchTable.setRowSorter(new TableRowSorter<TableModel>(_stm));
     searchTable.addMouseListener(jsc);
     searchTable.setShowGrid(false);
     searchTable.setIntercellSpacing(new Dimension(0, 0));
@@ -144,7 +150,6 @@ public class SearchFrame implements ActionListener {
     searchTable.setShowHorizontalLines(true);
     searchTable.setToolTipText("Double-click on a search to execute it!");
     searchTable.getTableHeader().setReorderingAllowed(false);
-    _ts.addMouseListenerToHeaderInTable(searchTable);
     JScrollPane jsp = new JScrollPane(searchTable, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
     jsp.getViewport().setBackground(UIManager.getColor("window"));
 
@@ -167,11 +172,8 @@ public class SearchFrame implements ActionListener {
   private Searcher add(String type, String name, String search, String server) {
     int inc=0;
     String curName = name + Integer.toString(inc);
-    SearchManager sm = SearchManager.getInstance();
-    Searcher s;
-
-    s = sm.buildSearch(System.currentTimeMillis(), type, curName, search, server, null, -1);
-    _ts.insert(s);
+    Searcher s = searchManager.buildSearch(System.currentTimeMillis(), type, curName, search, server, null, -1);
+    _stm.insert(s);
 
     return s;
   }

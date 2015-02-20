@@ -5,6 +5,8 @@ package com.jbidwatcher.ui;
  * Developed by mrs (Morgan Schweers)
  */
 
+import com.google.inject.Inject;
+import com.google.inject.assistedinject.Assisted;
 import com.jbidwatcher.ui.config.JConfigFrame;
 import com.jbidwatcher.ui.util.*;
 import com.jbidwatcher.ui.table.TableColumnController;
@@ -13,6 +15,7 @@ import com.jbidwatcher.util.queue.MessageQueue;
 
 import java.awt.event.*;
 import java.awt.*;
+import javax.annotation.Nullable;
 import javax.swing.*;
 import javax.swing.event.PopupMenuListener;
 import javax.swing.event.PopupMenuEvent;
@@ -26,19 +29,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
   private JMenu _deleteSubmenu = null;
   private Map<String, JCheckBoxMenuItem> menuItemMap = new TreeMap<String, JCheckBoxMenuItem>();
   private FilterManager mFilter;
-
-  /**
-   * @param inTabs - The tab display to act as a context menu for.
-   * @brief Construct a menu & listener to be used as a context menu
-   * on the tabbed display.
-   */
-  public JTabPopupMenu(JTabbedPane inTabs, FilterManager filters) {
-    mFilter = filters;
-    mTabs = inTabs;
-    localPopup = new JPopupMenu();
-    makeTabMenu(localPopup);
-    inTabs.addMouseListener(this);
-  }
+  private final ListManager listManager;
 
   /**
    * @param inTabs - The tab display to act as a context menu for.
@@ -46,11 +37,19 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
    * @brief Construct a menu & listener to be used as a context menu
    * on the tabbed display.
    */
-  public JTabPopupMenu(JTabbedPane inTabs, JPopupMenu popup, FilterManager filters) {
+  @Inject
+  public JTabPopupMenu(ListManager listManager, FilterManager filters, @Assisted JTabbedPane inTabs, @Nullable @Assisted JPopupMenu popup) {
+    this.listManager = listManager;
     mFilter = filters;
     mTabs = inTabs;
-    localPopup = popup;
-    makeTabMenu(localPopup);
+    if(popup != null) {
+      localPopup = popup;
+      makeTabMenu(localPopup);
+    } else {
+      localPopup = new JPopupMenu();
+      makeTabMenu(localPopup);
+      inTabs.addMouseListener(this);
+    }
   }
 
   /**
@@ -82,10 +81,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
   }
 
   /**
-   * @brief Use reflection to determine if we have an indexAtLocation
-   * function, and always allow them to TRY to delete, if we don't.
-   * If we do, figure if it's the bottom three tabs (current,
-   * completed, selling) we don't want to allow delete.
+   * @brief If it's the bottom three tabs (current, completed, selling) we don't want to allow delete.
    *
    * @param inPopup - The pop-up menu that is going to be displayed.
    * @param e - The event that occurred (a context-operation).
@@ -147,7 +143,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
   }
 
   private void setColumnChecks(String tabName) {
-    List<String> columns = ListManager.getInstance().getColumns(tabName);
+    List<String> columns = listManager.getColumns(tabName);
     for (String colName : columns) {
       JCheckBoxMenuItem jch = menuItemMap.get(colName);
       jch.setState(true);
@@ -174,7 +170,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
     JTabProperties properties = tabToProperties.get(tabName);
 
     if(properties == null) {
-      properties = new JTabProperties(tabName);
+      properties = new JTabProperties(listManager, tabName);
       tabToProperties.put(tabName, properties);
     }
 
@@ -223,7 +219,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
 
     String tabName = mTabs.getTitleAt(tabIndex);
     if(actionString.charAt(0) == '~') {
-      boolean result = ListManager.getInstance().toggleField(tabName, actionString.substring(1));
+      boolean result = listManager.toggleField(tabName, actionString.substring(1));
       if(tabToProperties != null) {
         JTabProperties properties = tabToProperties.get(tabName);
         if(properties != null) {
@@ -245,7 +241,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
       switch(result) {
         case JFileChooser.APPROVE_OPTION:
           String fname = jfc.getSelectedFile().getAbsolutePath();
-          if(!ListManager.getInstance().exportTab(tabName, fname)) {
+          if(!listManager.exportTab(tabName, fname)) {
             JOptionPane.showMessageDialog(null, "Could not export tab [" + tabName + "].", "Export error", JOptionPane.PLAIN_MESSAGE);
           }
           return;
@@ -260,7 +256,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
       if(tabIndex == -1) {
         JConfig.log().logDebug("Can't print unknown tab, must prompt...");
       } else {
-        if(!ListManager.getInstance().printTab(tabName)) {
+        if(!listManager.printTab(tabName)) {
           JOptionPane.showMessageDialog(null, "Could not print tab [" + tabName + "].", "Print error", JOptionPane.PLAIN_MESSAGE);
         }
       }
@@ -279,7 +275,7 @@ public class JTabPopupMenu extends JContext implements MessageQueue.Listener {
         JConfig.log().logDebug("Prompting for Delete...\n");
       } else {
         JConfig.log().logDebug("Deleting tab [" + tabName + "]...\n");
-        Component removed = ListManager.getInstance().deleteTab(tabName, eraseEntries);
+        Component removed = listManager.deleteTab(tabName, eraseEntries);
         if(removed == null) {
           JOptionPane.showMessageDialog(null, "Could not delete tab [" + tabName + "].", "Tab deletion error", JOptionPane.PLAIN_MESSAGE);
         } else {

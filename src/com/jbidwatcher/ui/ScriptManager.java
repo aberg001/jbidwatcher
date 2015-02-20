@@ -2,13 +2,13 @@ package com.jbidwatcher.ui;
 
 import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.util.queue.MessageQueue;
-import com.jbidwatcher.util.script.Scripting;
+import com.jbidwatcher.scripting.Scripting;
 
 import javax.swing.*;
 import java.awt.*;
 import java.util.Arrays;
 
-import org.jruby.demo.TextAreaReadline;
+import org.jruby.demo.readline.TextAreaReadline;
 import org.jruby.Ruby;
 import org.jruby.RubyInstanceConfig;
 
@@ -18,17 +18,6 @@ public class ScriptManager implements MessageQueue.Listener
   private Thread t2;
 
   private static final String EXECUTE = "EXECUTE ";
-
-  public static void main(String[] args) {
-    try {
-      Scripting.initialize();
-      ScriptManager sm = new ScriptManager();
-      sm.prepFrame();
-      sm.show();
-    } catch(ClassNotFoundException e) {
-      System.err.println("Failed to initialize scripting.");
-    }
-  }
 
   public void show() {
     mFrame.setVisible(true);

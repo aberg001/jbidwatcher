@@ -6,7 +6,6 @@ package com.jbidwatcher.auction;
  */
 
 import com.jbidwatcher.util.Currency;
-import com.jbidwatcher.util.xml.XMLElement;
 import com.jbidwatcher.util.db.ActiveRecord;
 import com.jbidwatcher.util.db.Table;
 
@@ -23,7 +22,7 @@ public class MultiSnipe extends ActiveRecord {
   private Color mBackground;
 
   public synchronized int activeEntries() {
-    return getAuctionEntriesInThisGroup().size();
+    return getAuctionEntriesInThisGroup(corral).size();
   }
 
   public static void setCorral(EntryCorralTemplate corral) {
@@ -136,7 +135,7 @@ public class MultiSnipe extends ActiveRecord {
    * param ae - The auction that was won.
    */
   public synchronized void setWonAuction(/*Snipeable ae*/) {
-    List<? extends Snipeable> oldEntries = getAuctionEntriesInThisGroup();
+    List<? extends Snipeable> oldEntries = getAuctionEntriesInThisGroup(corral);
 
     for (Snipeable aeFromList : oldEntries) {
       aeFromList.cancelSnipe(false);
@@ -146,7 +145,7 @@ public class MultiSnipe extends ActiveRecord {
   public synchronized boolean anyEarlier(Snipeable inEntry) {
     String inIdentifier = inEntry.getIdentifier();
 
-    for (Snipeable ae : getAuctionEntriesInThisGroup()) {
+    for (Snipeable ae : getAuctionEntriesInThisGroup(corral)) {
       //  If any auction entry in the list ends BEFORE the one we're
       //  checking, then we really don't want to do anything until
       //  it's no longer in the list.
@@ -184,7 +183,7 @@ public class MultiSnipe extends ActiveRecord {
   }
 
   public synchronized boolean isSafeToAdd(Snipeable ae) {
-    for (Snipeable fromList : getAuctionEntriesInThisGroup()) {
+    for (Snipeable fromList : getAuctionEntriesInThisGroup(corral)) {
       //  It's always safe to 'add' an entry that already exists,
       //  it'll just be reloaded.
       if (!fromList.getIdentifier().equals(ae.getIdentifier())) {
@@ -195,8 +194,8 @@ public class MultiSnipe extends ActiveRecord {
     return true;
   }
 
-  private List<? extends Snipeable> getAuctionEntriesInThisGroup() {
-    return EntryCorral.getInstance().getMultisnipedByGroup(getString("id"));
+  private List<? extends Snipeable> getAuctionEntriesInThisGroup(EntryCorralTemplate corral) {
+    return ((EntryCorral)corral).getMultisnipedByGroup(getString("id"));
   }
 
   public boolean subtractShipping() {
@@ -252,36 +251,5 @@ public class MultiSnipe extends ActiveRecord {
     }
 
     return toDelete.get(0).getDatabase().deleteBy("id IN (" + multisnipes + ")");
-  }
-
-  public XMLElement toXML() {
-    XMLElement xmulti = new XMLElement("multisnipe");
-    xmulti.setEmpty();
-    xmulti.setProperty("subtractshipping", Boolean.toString(subtractShipping()));
-    xmulti.setProperty("color", getColorString());
-    xmulti.setProperty("default", getSnipeValue(null).fullCurrency());
-    xmulti.setProperty("id", Long.toString(getIdentifier()));
-
-    return xmulti;
-  }
-
-  @SuppressWarnings({"UnusedParameters"})
-  public void fromXML(XMLElement in) {
-
-  }
-
-  public static MultiSnipe loadFromXML(XMLElement curElement) {
-    String identifier = curElement.getProperty("ID");
-    String bgColor = curElement.getProperty("COLOR");
-    Currency defaultSnipe = Currency.getCurrency(curElement.getProperty("DEFAULT"));
-    boolean subtractShipping = curElement.getProperty("SUBTRACTSHIPPING", "false").equals("true");
-
-    MultiSnipe ms = MultiSnipe.findFirstBy("identifier", identifier);
-    if(ms == null) {
-      ms = new MultiSnipe(bgColor, defaultSnipe, Long.parseLong(identifier), subtractShipping);
-      ms.saveDB();
-    }
-
-    return ms;
   }
 }

@@ -9,7 +9,6 @@ import com.jbidwatcher.ui.util.JPasteListener;
 import com.jbidwatcher.ui.util.OptionUI;
 import com.jbidwatcher.ui.util.SpringUtilities;
 import com.jbidwatcher.util.config.JConfig;
-import com.jbidwatcher.util.queue.MQFactory;
 import com.jbidwatcher.my.MyJBidwatcher;
 
 import java.awt.*;
@@ -20,12 +19,12 @@ import java.util.HashMap;
 import javax.swing.*;
 
 public class JConfigMyJBidwatcherTab extends JConfigTab {
+  private final MyJBidwatcher myJBidwatcher;
   private JCheckBox mEnable;
   private JTextField mEmail;
   private JTextField mPassword;
   private JButton mCreateOrUpdate;
   private JLabel mStatusLabel;
-  private JButton mDoUpload;
   private Map<JCheckBox,String> mConfigurationMap = new HashMap<JCheckBox,String>();
   private Map<JCheckBox,String> mEnabledMap = new HashMap<JCheckBox,String>();
   private JLabel mListingStats;
@@ -42,7 +41,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     String email = mEmail.getText();
     String password = mPassword.getText();
 
-    if (MyJBidwatcher.getInstance().getAccountInfo(email, password)) {
+    if (myJBidwatcher.getAccountInfo(email, password)) {
       JConfig.setConfiguration("my.jbidwatcher.id", email);
       JConfig.setConfiguration("my.jbidwatcher.key", password);
     }
@@ -79,7 +78,6 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     for(ActionListener al : mEnable.getActionListeners()) {
       al.actionPerformed(new ActionEvent(mEnable, ActionEvent.ACTION_PERFORMED, "Redraw"));
     }
-    mDoUpload.setEnabled(JConfig.queryConfiguration("my.jbidwatcher.uploaded") == null);
   }
 
   private void setComponentTooltip(JComponent comp, String text) {
@@ -90,7 +88,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
   private static final ImageIcon successIcon = new ImageIcon(JConfig.getResource("/icons/status_green_16.png"));
   private static final ImageIcon failIcon = new ImageIcon(JConfig.getResource("/icons/status_red_16.png"));
 
-  private JPanel buildUserSettings() {
+  private JPanel buildUserSettings(JPasteListener pasteListener) {
     JPanel jp = new JPanel(new BorderLayout());
     jp.setBorder(BorderFactory.createTitledBorder("My JBidwatcher User Settings"));
 
@@ -98,7 +96,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     innerPanel.setLayout(new SpringLayout());
 
     mEmail = new JTextField();
-    mEmail.addMouseListener(JPasteListener.getInstance());
+    mEmail.addMouseListener(pasteListener);
     setComponentTooltip(mEmail, "Email address to use for your My JBidwatcher account.");
     final JLabel emailLabel = new JLabel("Email Address:");
     emailLabel.setLabelFor(mEmail);
@@ -106,7 +104,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     innerPanel.add(mEmail);
 
     mPassword = new JTextField();
-    mPassword.addMouseListener(JPasteListener.getInstance());
+    mPassword.addMouseListener(pasteListener);
     setComponentTooltip(mPassword, "My JBidwatcher access key");
     final JLabel passwordLabel = new JLabel("Access Key:");
     passwordLabel.setLabelFor(mPassword);
@@ -121,7 +119,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
         String action = event.getActionCommand();
         if(action == null) return;
 
-        if(MyJBidwatcher.getInstance().getAccountInfo(mEmail.getText(), mPassword.getText())) {
+        if(myJBidwatcher.getAccountInfo(mEmail.getText(), mPassword.getText())) {
           mStatusLabel.setIcon(successIcon);
           mStatusLabel.setText("success!");
           if(JConfig.queryConfiguration("my.jbidwatcher.sync") == null) JConfig.setConfiguration("my.jbidwatcher.sync", "true");
@@ -134,19 +132,8 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     });
     button.add(mCreateOrUpdate);
     button.add(mStatusLabel);
-    mDoUpload = new JButton("Upload All");
-    mDoUpload.addActionListener(new ActionListener() {
-      public void actionPerformed(ActionEvent e) {
-        String action = e.getActionCommand();
-        if (action == null) return;
 
-        MQFactory.getConcrete("user").enqueue("Upload");
-        JConfig.setConfiguration("my.jbidwatcher.uploaded", "true");
-        mDoUpload.setEnabled(false);
-      }
-    });
-    mDoUpload.setEnabled(JConfig.queryConfiguration("my.jbidwatcher.uploaded") == null);
-    innerPanel.add(mDoUpload);
+    innerPanel.add(new JLabel());  //  Just a dead zone, to make the rows * columns work out.
     innerPanel.add(button);
 
     SpringUtilities.makeCompactGrid(innerPanel, 3, 2, 6, 6, 6, 1);
@@ -183,8 +170,9 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     return(jp);
   }
 
-  public JConfigMyJBidwatcherTab() {
+  public JConfigMyJBidwatcherTab(MyJBidwatcher myJBidwatcher, JPasteListener pasteListener) {
     super();
+    this.myJBidwatcher = myJBidwatcher;
     String prefix = "<html><body><div style=\"font-size: 0.96em;\"><center><i>";
     String suffix = "</i></center></div></body></html>";
     String link = "<a href=\"http://my.jbidwatcher.com\">My JBidwatcher</a>";
@@ -192,7 +180,7 @@ public class JConfigMyJBidwatcherTab extends JConfigTab {
     this.setLayout(new BorderLayout());
     JPanel jp = new JPanel();
     jp.setLayout(new BorderLayout());
-    jp.add(buildUserSettings(), BorderLayout.NORTH);
+    jp.add(buildUserSettings(pasteListener), BorderLayout.NORTH);
     jp.add(buildExtraSettings(), BorderLayout.SOUTH);
     this.add(panelPack(jp), BorderLayout.CENTER);
     this.add(jep, BorderLayout.NORTH);

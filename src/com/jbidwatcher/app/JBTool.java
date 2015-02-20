@@ -1,23 +1,31 @@
 package com.jbidwatcher.app;
 
+import com.google.inject.AbstractModule;
+import com.google.inject.Guice;
+import com.google.inject.Inject;
+import com.google.inject.Injector;
+import com.google.inject.assistedinject.FactoryModuleBuilder;
 import com.jbidwatcher.auction.*;
+import com.jbidwatcher.auction.server.AuctionServer;
+import com.jbidwatcher.auction.server.AuctionServerFactory;
 import com.jbidwatcher.auction.server.ebay.ebayServer;
 import com.jbidwatcher.auction.server.AuctionServerManager;
+import com.jbidwatcher.scripting.JRubyPreloader;
+import com.jbidwatcher.ui.AuctionsManager;
+import com.jbidwatcher.util.*;
 import com.jbidwatcher.util.Observer;
 import com.jbidwatcher.util.config.JConfig;
 import com.cyberfox.util.config.Base64;
 import com.jbidwatcher.util.db.ActiveRecord;
-import com.jbidwatcher.util.xml.XMLElement;
+import com.jbidwatcher.scripting.Scripting;
 import com.jbidwatcher.util.queue.AuctionQObject;
 import com.jbidwatcher.util.queue.MQFactory;
-import com.jbidwatcher.util.Constants;
-import com.jbidwatcher.util.ToolInterface;
-import com.jbidwatcher.util.StringTools;
 import com.jbidwatcher.util.html.JHTML;
-import com.jbidwatcher.util.webserver.SimpleProxy;
 import com.jbidwatcher.my.MyJBidwatcher;
 import com.jbidwatcher.search.SearchManager;
 import com.jbidwatcher.search.Searcher;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
 
 import java.util.*;
 import java.text.SimpleDateFormat;
@@ -28,26 +36,32 @@ import java.net.HttpURLConnection;
 
 /**
  * This provides a command-line interface to JBidwatcher, loading an individual auction
- * and returning the XML for it.
+ * and returning the JSON for it.
  *
  * User: mrs
  * Date: Oct 4, 2008
  * Time: 6:42:11 PM
  */
 @SuppressWarnings({"UtilityClass", "UtilityClassWithoutPrivateConstructor"})
-public class JBTool implements ToolInterface {
+public class JBTool {
+  @Inject
+  private AuctionServerFactory serverFactory;
+
+  private final EntryFactory entryFactory;
+  private final SearchManager searchManager;
+  private final AuctionServerManager auctionServerManager;
+  private final MyJBidwatcher myJBidwatcher;
   private boolean mLogin = false;
   private String mUsername = null;
   private String mPassword = null;
-  private SimpleProxy mServer = null;
   private boolean mJustMyeBay = false;
-  private boolean mRunServer = false;
-//  private int mSiteNumber = -1;
-  private String mPortNumber = null;
+  //  private int mSiteNumber = -1;
   private List<String> mParams;
   private ebayServer mEbay;
   private String mCountry = "ebay.com";
   private String mParseFile = null;
+  private boolean mCompare = false;
+  private boolean mMultiFiles = false;
 
   private void testBasicAuthentication(final String user, final String key) throws Exception {
     URL retrievalURL = JConfig.getURL("http://localhost:9909/services/sqsurl");
@@ -82,7 +96,7 @@ public class JBTool implements ToolInterface {
   }
 
   private void testSearching() {
-    Searcher sm = SearchManager.getInstance().addSearch("Title", "zarf", "zarf", "ebay", -1, 12345678);
+    Searcher sm = searchManager.addSearch("Title", "zarf", "zarf", "ebay", -1, 12345678);
     sm.execute();
   }
 
@@ -101,35 +115,60 @@ public class JBTool implements ToolInterface {
 
   public void execute() {
     setupAuctionResolver();
-    if(mLogin) forceLogin();
+    if(mLogin) mEbay.forceLogin();
 
-    if(mRunServer) {
-      spawnServer();
-    } else if(mJustMyeBay) {
+    if (mJustMyeBay) {
       MQFactory.getConcrete(mEbay.getFriendlyName()).enqueueBean(new AuctionQObject(AuctionQObject.LOAD_MYITEMS, null, null));
       try { Thread.sleep(120000); } catch(Exception ignored) { }
     } else if(mParseFile != null) {
       JConfig.setHomeDirectory("./");
-      buildAuctionEntryFromFile(mParseFile);
+      if (mCompare) {
+        comparative(mParseFile);
+      } else {
+        buildAuctionEntryFromFile(mParseFile);
+      }
+    } else if(mMultiFiles) {
+      for (String file : mParams) {
+        comparative(file);
+      }
     } else {
       retrieveAndVerifyAuctions(mParams);
     }
   }
 
-  public JBTool(String[] args) {
-    mParams = parseOptions(args);
+  public JBTool(EntryFactory eFactory, final EntryCorral corral, SearchManager searchManager, AuctionServerManager serverManager,
+                MyJBidwatcher myJBidwatcher) {
+    this.entryFactory = eFactory;
+    this.searchManager = searchManager;
+    this.auctionServerManager = serverManager;
+    this.myJBidwatcher = myJBidwatcher;
+
+    ActiveRecord.disableDatabase();
+    AuctionEntry.addObserver(entryFactory);
+    AuctionEntry.addObserver(new Observer<AuctionEntry>() {
+      public void afterCreate(AuctionEntry o) {
+        corral.putWeakly(o);
+      }
+    });
   }
 
   public static void main(String[] args) {
 //    JConfig.setLogger(new ErrorManagement());
-    ActiveRecord.disableDatabase();
-    AuctionEntry.addObserver(EntryFactory.getInstance());
-    AuctionEntry.addObserver(new Observer<AuctionEntry>() {
-      public void afterCreate(AuctionEntry o) {
-        EntryCorral.getInstance().putWeakly(o);
+
+    AbstractModule guiceModule = new AbstractModule() {
+      @Override
+      protected void configure() {
+        bind(EntryManager.class).to(AuctionsManager.class);
+        install(new FactoryModuleBuilder()
+            .implement(AuctionServer.class, ebayServer.class)
+            .build(AuctionServerFactory.class));
       }
-    });
-    JBTool tool = new JBTool(args);
+    };
+
+    Injector inject = Guice.createInjector(guiceModule);
+    JBTool tool = inject.getInstance(JBTool.class);
+
+    tool.mParams = tool.parseOptions(args);
 
     tool.execute();
     System.exit(0);
@@ -140,10 +179,29 @@ public class JBTool implements ToolInterface {
     try {
       long start = System.currentTimeMillis();
       AuctionInfo ai = mEbay.doParse(sb);
-      AuctionEntry ae = EntryFactory.getInstance().constructEntry();
+      AuctionEntry ae = entryFactory.constructEntry();
       ae.setAuctionInfo(ai);
       System.out.println("Took: " + (System.currentTimeMillis() - start));
-      System.out.println(ae.toXML().toString());
+      System.out.println(JSONObject.toJSONString(ae.getBacking()));
+    } catch (Exception e) {
+      JConfig.log().handleException("Failed to load auction from file: " + fname, e);
+    }
+  }
+
+  private void comparative(String fname) {
+    JRubyPreloader preloader = new JRubyPreloader(new Object());
+    preloader.run();
+    StringBuffer sb = new StringBuffer(StringTools.cat(fname));
+    try {
+      Record jResults = mEbay.doParse(sb).getBacking();
+      Record rResults = mEbay.tryRuby(sb);
+
+      System.out.println("Java:");
+      dumpMap(jResults);
+
+      System.out.println("\n\nRuby:");
+      dumpMap(rResults);
+      System.out.println();
     } catch (Exception e) {
       JConfig.log().handleException("Failed to load auction from file: " + fname, e);
     }
@@ -152,33 +210,26 @@ public class JBTool implements ToolInterface {
   private void retrieveAndVerifyAuctions(List<String> params) {
     if(params.size() == 0) return;
     try {
-      XMLElement auctionList = new XMLElement("auctions");
+      JSONArray ary = new JSONArray();
       for (String id : params) {
-        XMLElement xmlized = mEbay.create(id).toXML();
-        if (xmlized != null) auctionList.addChild(xmlized);
+        JSONObject element = new JSONObject();
+        element.putAll(mEbay.create(id).getBacking());
+        ary.add(element);
       }
-      System.out.println(auctionList.toString());
+      System.out.println(ary.toJSONString());
     } catch(Exception dumpMe) {
       JConfig.log().handleException("Failure during serialization or deserialization of an auction", dumpMe);
     }
   }
 
-  private void spawnServer() {
-    int listenPort = 9099;
-    if(mPortNumber != null) listenPort = Integer.parseInt(mPortNumber);
-    mServer = new SimpleProxy(listenPort, MiniServer.class, this);
-    mServer.go();
-    try { mServer.join(); } catch(Exception ignored) { /* Time to die... */ }
-  }
-
   private void setupAuctionResolver() {
-    mEbay = new ebayServer(mCountry, mUsername, mPassword);
+    mEbay = (ebayServer)serverFactory.create(mCountry, mUsername, mPassword);
 
     Resolver r = new Resolver() {
       public AuctionServerInterface getServer() { return mEbay; }
     };
-    AuctionServerManager.getInstance().setServer(mEbay);
-    EntryFactory.setResolver(r);
+    auctionServerManager.setServer(mEbay);
+    entryFactory.setResolver(r);
   }
 
   private List<String> parseOptions(String[] args) {
@@ -215,15 +266,13 @@ public class JBTool implements ToolInterface {
       if(option.equals("uk")) { option="country=ebay.co.uk"; }
       if(option.equals("accountinfo")) { testAccountInfo(); return params; }
       if(option.equals("searching")) { testSearching(); return params; }
-      if(option.equals("server")) mRunServer = true;
-      if(option.startsWith("port=")) mPortNumber = option.substring(5);
       if(option.equals("logging")) JConfig.setConfiguration("logging", "true");
       if(option.equals("debug")) JConfig.setConfiguration("debugging", "true");
       if(option.equals("timetest")) testDateFormatting();
       if(option.equals("logconfig")) JConfig.setConfiguration("config.logging", "true");
       if(option.equals("logurls")) JConfig.setConfiguration("debug.urls", "true");
       if(option.equals("myebay")) mJustMyeBay = true;
-      if(option.equals("sandbox")) JConfig.setConfiguration("replace." + JConfig.getVersion() + ".ebayServer.viewHost", "cgi.sandbox.ebay.com");
+      if(option.equals("sandbox")) JConfig.setConfiguration("replace." + Constants.PROGRAM_VERS + ".ebayServer.viewHost", "cgi.sandbox.ebay.com");
       if(option.startsWith("country=")) {
         mCountry = option.substring(8);
         if(getSiteNumber(mCountry) == -1) System.out.println("That country is not recognized by JBidwatcher's eBay Server.");
@@ -237,9 +286,11 @@ public class JBTool implements ToolInterface {
         System.out.println("Took: " + (System.currentTimeMillis() - start));
       }
       if(option.startsWith("file=")) mParseFile = option.substring(5);
+      if(option.startsWith("compare=")) { mParseFile = option.substring(8); mCompare = true; }
+      if(option.startsWith("bulk")) { mCompare = true; mMultiFiles = true; }
       if(option.startsWith("bidfile=")) testBidHistory(option.substring(8));
       if(option.startsWith("adult")) JConfig.setConfiguration("ebay.mature", "true");
-      if(option.startsWith("upload=")) MyJBidwatcher.getInstance().sendFile(new File(option.substring(7)), "http://my.jbidwatcher.com/upload/log", "cyberfox@jbidwatcher.com", "This is a <test> of descriptions & stuff.");
+      if(option.startsWith("upload=")) myJBidwatcher.sendFile(new File(option.substring(7)), "http://my.jbidwatcher.com/upload/log", "cyberfox@jbidwatcher.com", "This is a <test> of descriptions & stuff.");
     }
 
     if(!mLogin) {
@@ -258,31 +309,7 @@ public class JBTool implements ToolInterface {
     return -1;
   }
 
-  public void done() {
-    mServer.halt();
-    mServer.interrupt();
-  }
-
-  public void forceLogin() {
-    mEbay.forceLogin();
-  }
-
   private void dumpMap(Map m) {
-    dumpMap(m, 0);
-    System.out.println();
-  }
-
-  private void dumpMap(Map m, int offset) {
-    System.out.println("{");
-    for (Object o : m.keySet()) {
-      Object value = m.get(o);
-      if (value instanceof String) {
-        System.out.println("\"" + o.toString() + "\" => \"" + value.toString().replace("\"", "\\\"") + "\"");
-      } else if (value instanceof Map) {
-        System.out.print("\"" + o.toString() + "\" => ");
-        dumpMap((Map) value, offset + 2);
-      }
-    }
-    System.out.print("}");
+    Scripting.rubyMethod("dump_hash", m);
   }
 }

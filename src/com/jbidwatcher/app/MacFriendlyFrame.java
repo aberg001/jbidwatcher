@@ -7,7 +7,6 @@ import com.jbidwatcher.util.xml.XMLElement;
 import com.jbidwatcher.auction.AuctionEntry;
 import com.jbidwatcher.ui.util.JMouseAdapter;
 import com.jbidwatcher.ui.util.OptionUI;
-import com.jbidwatcher.ui.util.ButtonMaker;
 import com.jbidwatcher.ui.*;
 import com.cyberfox.util.platform.Platform;
 
@@ -41,7 +40,7 @@ class MacFriendlyFrame extends JFrame implements com.apple.mrj.MRJQuitHandler, c
    * @param iconURL - The URL of the icon to associate with the frame.
    * @param tabManager - The Tab Manager to display within the frame.
    */
-  public MacFriendlyFrame(String title, JMouseAdapter myFrameAdapter, URL iconURL, JTabManager tabManager) {
+  public MacFriendlyFrame(JBidToolBar toolBar, String title, JMouseAdapter myFrameAdapter, URL iconURL, JTabManager tabManager) {
     super(title);
 
     setMinimumSize(new Dimension(1000, 320));
@@ -56,9 +55,9 @@ class MacFriendlyFrame extends JFrame implements com.apple.mrj.MRJQuitHandler, c
 
     if (JConfig.queryConfiguration("mac.useMetal", "true").equals("true")) getRootPane().putClientProperty("apple.awt.brushMetalLook", "true");
 
-    JPanel headerBar = JBidToolBar.getInstance().buildHeaderBar(this, tabManager);
+    JPanel headerBar = toolBar.buildHeaderBar(this, tabManager);
 
-    JPanel statusPane = buildStatusLine(tabManager);
+    JPanel statusPane = buildStatusLine();
 
     getContentPane().add(tabManager.getTabs());
     getContentPane().add(statusPane, BorderLayout.SOUTH);
@@ -84,7 +83,7 @@ class MacFriendlyFrame extends JFrame implements com.apple.mrj.MRJQuitHandler, c
     });
   }
 
-  private JPanel buildStatusLine(JTabManager tabManager) {
+  private JPanel buildStatusLine() {
     final JPanel statusPane = new JPanel();
     Border myBorder = BorderFactory.createCompoundBorder(
         BorderFactory.createCompoundBorder(
@@ -93,10 +92,6 @@ class MacFriendlyFrame extends JFrame implements com.apple.mrj.MRJQuitHandler, c
         BorderFactory.createEmptyBorder(1, 5, 1, 5));
     statusPane.setBorder(myBorder);
     statusPane.setLayout(new BoxLayout(statusPane, BoxLayout.X_AXIS));
-
-    JButton rssButton = ButtonMaker.makeButton("icons/xml.png", "Show RSS feed information", "RSS", tabManager, true);
-    rssButton.setMinimumSize(new Dimension(rssButton.getIcon().getIconWidth()+2, rssButton.getIcon().getIconHeight()));
-    statusPane.add(rssButton);
 
     JSeparator vert1 = new JSeparator(SwingConstants.VERTICAL);
     vert1.setForeground(Color.DARK_GRAY);
@@ -127,7 +122,7 @@ class MacFriendlyFrame extends JFrame implements com.apple.mrj.MRJQuitHandler, c
 
     statusPane.add(Box.createHorizontalStrut(10));
 
-    final int baseSize = 14 + rssButton.getIcon().getIconWidth() + 2 + 10 + 10 + 300 + 10;
+    final int baseSize = 14 + 2 + 10 + 10 + 300 + 10;
     addComponentListener(new ComponentAdapter() {
       public void componentResized(ComponentEvent e) {
         int textWidthAllowed = statusPane.getWidth() - baseSize;

@@ -7,18 +7,20 @@ package com.jbidwatcher.ui.table;
 
 import com.jbidwatcher.search.SearchManager;
 import com.jbidwatcher.search.Searcher;
-import com.jbidwatcher.util.Constants;
+import com.jbidwatcher.util.*;
 
+import javax.swing.table.AbstractTableModel;
 import java.util.*;
 import java.text.SimpleDateFormat;
 
-public class SearchTableModel extends BaseTransformation
+public class SearchTableModel extends AbstractTableModel
 {
+  private final SearchManager searchManager;
   String[] column_names = {
     "Name", "Type", "Search Value", "Site", "Repeat Time", "Next Run"
   };
 
-  public int getRowCount() { return SearchManager.getInstance().getSearchCount(); }
+  public int getRowCount() { return searchManager.getSearchCount(); }
   public int getColumnCount() { return column_names.length; }
   public String getColumnName(int index) { return column_names[index]; }
 
@@ -40,7 +42,7 @@ public class SearchTableModel extends BaseTransformation
   }
 
   public Object getSortByValueAt(int i, int j) {
-    Searcher s = SearchManager.getInstance().getSearchByIndex(i);
+    Searcher s = searchManager.getSearchByIndex(i);
 
     switch(j) {
       case -1: return s;
@@ -57,7 +59,7 @@ public class SearchTableModel extends BaseTransformation
   }
 
   public Object getValueAt(int i, int j) {
-    Searcher s = SearchManager.getInstance().getSearchByIndex(i);
+    Searcher s = searchManager.getSearchByIndex(i);
 
     switch(j) {
       case -1:
@@ -101,30 +103,9 @@ public class SearchTableModel extends BaseTransformation
     return sdf.format(new Date(base));
   }
 
-  public SearchTableModel() {
+  public SearchTableModel(SearchManager searchManager) {
     super();
-  }
-
-  public int compare(int row1, int row2, ColumnStateList columnStateList) {
-	  int result = 0;
-	  
-	  for(ListIterator<ColumnState> li = columnStateList.listIterator(); li.hasNext();) {
-		  ColumnState cs = li.next();
-		  
-		  Class type = getSortByColumnClass(cs.getColumn());
-
-		  Object o1 = getSortByValueAt(row1, cs.getColumn());
-		  Object o2 = getSortByValueAt(row2, cs.getColumn());
-		  
-		  result = compareByClass(o1, o2, type) * cs.getSort();
-		  
-		  // The nth column is different
-		  if(result != 0) {
-			  break;
-		  }
-	  }
-	  
-	  return result;
+    this.searchManager = searchManager;
   }
 
   public boolean isCellEditable(int row, int column) {
@@ -132,11 +113,11 @@ public class SearchTableModel extends BaseTransformation
   }
 
   public void delete(int row) {
-    SearchManager.getInstance().deleteSearch(SearchManager.getInstance().getSearchByIndex(row));
+    searchManager.deleteSearch(searchManager.getSearchByIndex(row));
   }
 
   public int insert(Object newObj) {
-    SearchManager.getInstance().addSearch((Searcher)newObj);
+    searchManager.addSearch((Searcher)newObj);
     return getRowCount()-1;
   }
 }
